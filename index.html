@@ -461,7 +461,11 @@ body {
      ═══════════════════════════════════════ -->
 <div id="topbar">
   <h1 id="pageTitle">Home</h1>
-  <button class="icon-btn" onclick="navigate('add')" title="Add">＋</button>
+  <div style="display:flex;gap:8px">
+    <button class="icon-btn" id="topAddBtn" onclick="navigate('add')" title="Add">＋</button>
+    <button class="icon-btn" onclick="navigate('categories')" title="Categories" id="topCatBtn">📁</button>
+    <button class="icon-btn" onclick="navigate('settings')" title="Settings" id="topSetBtn">⚙️</button>
+  </div>
 </div>
  
 <div class="page active" id="page-home">
@@ -1036,8 +1040,11 @@ function navigate(page) {
   const tabId = 'tab-' + (pageTabMap[page]||page);
   const tabEl = document.getElementById(tabId);
   if (tabEl) tabEl.classList.add('active');
-  // Show/hide topbar add button
-  document.querySelector('#topbar .icon-btn').style.display = page==='add' ? 'none' : 'flex';
+  // Show/hide topbar buttons
+  const isAdd = page==='add';
+  document.getElementById('topAddBtn').style.display = isAdd ? 'none' : 'flex';
+  document.getElementById('topCatBtn').style.display = isAdd ? 'none' : 'flex';
+  document.getElementById('topSetBtn').style.display = isAdd ? 'none' : 'flex';
   currentPage = page;
   renderPage(page);
 }
@@ -1532,31 +1539,66 @@ function renderAccountSavings() {
   const txns = DB.txns;
   const totalSav = accSavings(txns);
   let html = `<button class="btn btn-primary" style="margin-bottom:14px;border-radius:var(--radius-sm)" onclick="showAccModal('savings','new')">+ Add Savings Instrument</button>`;
+ 
+  // Purple total card with edit button for opening savings
   html += `<div class="card" style="margin-bottom:14px;background:linear-gradient(135deg,var(--purple),#3D2066);color:white">
-    <div style="font-size:12px;opacity:.8">Total Accumulated Savings</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div style="font-size:12px;opacity:.8">Total Accumulated Savings</div>
+      <button onclick="editOpeningSavings()" style="background:rgba(255,255,255,0.2);border:none;border-radius:8px;padding:4px 10px;color:white;font-size:12px;font-weight:600;cursor:pointer">✏️ Edit Opening</button>
+    </div>
     <div style="font-family:'DM Serif Display',serif;font-size:30px;margin:4px 0">${INR(totalSav)}</div>
     <div style="font-size:13px;opacity:.85">Opening: ${INR0(DB.settings.openSavings||0)}</div>
+    <div style="font-size:12px;opacity:.7;margin-top:2px">+ Contributions: ${INR0(totalSavings(txns))}</div>
   </div>`;
-  DB.accounts.savingsInstruments.forEach(s=>{
-    const contrib = txns.filter(t=>t.catName&&t.catName.toLowerCase().includes(s.name.toLowerCase().split('/')[0].trim())).reduce((sum,t)=>sum+t.amount,0);
-    const total = (s.openBal||0) + contrib;
-    html += `<div class="account-card">
-      <div class="account-header">
-        <div class="account-icon" style="background:${s.color}22">${s.icon}</div>
-        <div style="flex:1">
-          <div class="account-name">${s.name}</div>
-          <div class="account-type">Opening: ${INR0(s.openBal||0)}</div>
+ 
+  if (!DB.accounts.savingsInstruments || DB.accounts.savingsInstruments.length === 0) {
+    html += `<div class="empty-state"><div class="e-icon">💎</div><p>No savings instruments yet<br>Tap + to add one</p></div>`;
+  } else {
+    DB.accounts.savingsInstruments.forEach(s=>{
+      const contrib = txns.filter(t=>t.type==='savings' && t.catName && t.catName.toLowerCase().includes(s.name.toLowerCase().split('/')[0].trim())).reduce((sum,t)=>sum+t.amount,0);
+      const total = (s.openBal||0) + contrib;
+      html += `<div class="account-card">
+        <div class="account-header">
+          <div class="account-icon" style="background:${s.color}22">${s.icon}</div>
+          <div style="flex:1">
+            <div class="account-name">${s.name}</div>
+            <div class="account-type">Opening: ${INR0(s.openBal||0)}</div>
+          </div>
+          <div class="action-row">
+            <button class="action-btn edit" onclick="event.stopPropagation();showAccModal('savings','${s.id}')">✏️</button>
+            <button class="action-btn del" onclick="event.stopPropagation();deleteAccount('savings','${s.id}')">🗑️</button>
+          </div>
         </div>
-        <div class="action-row">
-          <button class="action-btn edit" onclick="event.stopPropagation();showAccModal('savings','${s.id}')">✏️</button>
-          <button class="action-btn del" onclick="event.stopPropagation();deleteAccount('savings','${s.id}')">🗑️</button>
-        </div>
-      </div>
-      <div class="account-balance" style="color:${s.color}">${INR(total)}</div>
-      <div style="font-size:12px;color:var(--text-2);margin-top:4px">Contributed: ${INR0(contrib)}</div>
-    </div>`;
-  });
+        <div class="account-balance" style="color:${s.color}">${INR(total)}</div>
+        <div style="font-size:12px;color:var(--text-2);margin-top:4px">Contributed: ${INR0(contrib)}</div>
+      </div>`;
+    });
+  }
   document.getElementById('acc-savings').innerHTML = html;
+}
+ 
+function editOpeningSavings() {
+  const current = DB.settings.openSavings || 0;
+  document.getElementById('accModalTitle').textContent = 'Edit Opening Savings';
+  document.getElementById('accModalBody').innerHTML = `
+    <p style="font-size:13px;color:var(--text-2);margin-bottom:16px">Your total savings corpus before tracking started (FDs, existing MFs, PPF, etc.)</p>
+    <div class="form-card" style="margin-bottom:16px">
+      <div class="form-row">
+        <div class="form-label">Opening (₹)</div>
+        <input type="number" id="acc-open" value="${current}"
+          style="flex:1;border:none;background:none;font-family:'DM Sans',sans-serif;font-size:14px;color:var(--green);font-weight:500;text-align:right;outline:none">
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="saveOpeningSavings()">Save</button>`;
+  openModal('accountModal');
+}
+ 
+function saveOpeningSavings() {
+  DB.settings.openSavings = +(document.getElementById('acc-open')?.value||0);
+  saveData(DB);
+  closeModal('accountModal');
+  renderAccountSavings();
+  showToast('Opening savings updated!');
 }
  
 // ── Account Add/Edit Modal ────────────────
