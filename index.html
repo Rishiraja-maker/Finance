@@ -1185,7 +1185,7 @@ function deleteTxn(txnId) {
 // SECTION 27: ADD TRANSACTION
 // ═══════════════════════════════════════════
  
-let addState = { type:'expense', xfrMode:'ccToBank', date:today() };
+let addState = { type:'expense', xfrMode:'ccToBank', date:today(), card:'none' };
  
 function renderAddForm() {
   const types = [
@@ -1279,16 +1279,24 @@ function renderFormFields() {
     }
  
   } else if (type === 'expense') {
-    html += formSelect('Credit Card','addCard',
-      [{v:'none',l:'— None (Bank)'},...cards.map(c=>({v:c.id,l:c.icon+' '+c.name}))],
-      addState.card||'none',
-      `onchange="addState.card=this.value;renderFormFields()"`);
-    if (!addState.card || addState.card==='none') {
+    // CC dropdown — inline onchange to update state then re-render
+    const ccOpts = [{v:'none',l:'— None (Pay by Bank)'},...cards.map(c=>({v:c.id,l:c.icon+' '+c.name}))];
+    const ccSel  = addState.card||'none';
+    const ccOptions = ccOpts.map(o=>`<option value="${o.v}" ${o.v===ccSel?'selected':''}>${o.l}</option>`).join('');
+    html += `<div class="form-row"><div class="form-label">Credit Card</div>
+      <select onchange="addState.card=this.value;renderFormFields()"
+        style="flex:1;border:none;background:none;font-family:'DM Sans',sans-serif;font-size:14px;color:var(--green);font-weight:500;text-align:right;outline:none;cursor:pointer">
+        ${ccOptions}
+      </select></div>`;
+ 
+    // Show bank field ONLY when no CC selected
+    if (!addState.card || addState.card === 'none') {
       html += divider();
       html += formSelect('Bank','addBank',
         banks.map(b=>({v:b.id, l:b.icon+' '+b.name})),
         addState.bank||banks[0]?.id||'sbi');
     }
+    // When CC is selected — bank field is completely hidden (not rendered)
  
   } else {
     // Income, Savings
@@ -1380,7 +1388,7 @@ function saveTxn() {
  
   saveData(DB);
   document.getElementById('addAmount').value = '';
-  addState = {type:'expense', xfrMode:'ccToBank', date:today()};
+  addState = {type:'expense', xfrMode:'ccToBank', date:today(), card:'none'};
   document.getElementById('addCancelBtn').onclick = () => navigate('home');
   setTimeout(()=>navigate('home'), 700);
 }
@@ -2640,6 +2648,4 @@ document.addEventListener('touchstart', e=>{ touchStartX=e.touches[0].clientX; }
 </script>
 </body>
 </html>
- 
-
  
