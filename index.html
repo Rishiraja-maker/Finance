@@ -522,6 +522,14 @@ body {
 </div>
  
 <!-- ═══════════════════════════════════════
+     SECTION 15B: ACCOUNT TRANSACTIONS PAGE
+     ═══════════════════════════════════════ -->
+<div class="page" id="page-acctxn">
+  <div id="acctxnSummary"></div>
+  <div id="acctxnList"></div>
+</div>
+ 
+<!-- ═══════════════════════════════════════
      SECTION 16: ACCOUNTS PAGE
      ═══════════════════════════════════════ -->
 <div class="page" id="page-accounts">
@@ -1028,7 +1036,7 @@ function getLast6Months() {
 // ═══════════════════════════════════════════
  
 let currentPage = 'home';
-const pageTitles = { home:'Home', add:'New Transaction', reports:'Reports', categories:'Categories', settings:'Settings', history:'History', accounts:'Accounts' };
+const pageTitles = { home:'Home', add:'New Transaction', reports:'Reports', categories:'Categories', settings:'Settings', history:'History', accounts:'Accounts', acctxn:'Transactions' };
 const pageTabMap  = { home:'home', history:'history', accounts:'accounts', reports:'reports' };
  
 function navigate(page) {
@@ -1057,6 +1065,7 @@ function renderPage(page) {
   if (page==='add')        renderAddForm();
   if (page==='history')    renderHistory();
   if (page==='accounts')   renderAccounts();
+  if (page==='acctxn')     { /* rendered by openAccTxn */ }
 }
  
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
@@ -1325,6 +1334,9 @@ function saveTxn() {
   const catName = catEl ? catEl.value : (addState.type==='ccPayment'?'Credit Card Payment':addState.type);
   const cat = DB.categories.find(c=>c.name===catName)||{group:'wants'};
  
+  // Determine if this expense is on a CC (bank should NOT be debited)
+  const isCCExpense = addState.type==='expense' && addState.card && addState.card!=='none';
+ 
   const txn = {
     id: editingTxnId || ('tx'+Date.now()),
     amount,
@@ -1332,7 +1344,8 @@ function saveTxn() {
     catName,
     catGroup: cat.group,
     date:     dateEl ? dateEl.value : addState.date,
-    bank:     bankEl ? bankEl.value : (addState.bank||'sbi'),
+    // KEY FIX: if CC expense, bank is null so bank balance is never touched
+    bank:     isCCExpense ? null : (bankEl ? bankEl.value : (addState.bank||'sbi')),
     toBank:   toBankEl ? toBankEl.value : null,
     card:     'none',
     xfrMode:  addState.xfrMode,
@@ -1343,8 +1356,9 @@ function saveTxn() {
   // Set card correctly
   if (addState.type==='ccPayment') {
     txn.card = cardEl ? cardEl.value : (addState.card||'amazon');
-  } else if (addState.type==='expense' && addState.card && addState.card!=='none') {
+  } else if (isCCExpense) {
     txn.card = addState.card;
+    txn.bank = null; // double-ensure bank is null for CC expenses
   } else if (addState.type==='transfer' && addState.xfrMode==='ccToBank') {
     txn.card = fromCardEl ? fromCardEl.value : (addState.card||'amazon');
     txn.bank = null;
@@ -1432,6 +1446,169 @@ function renderAccounts() {
   renderAccountSavings();
 }
  
+// ── Account Transaction View ─────────────────
+// Called when user taps any account card
+function openAccTxn(accType, accId, accName, accIcon) {
+  // Store filter context
+  window._accTxnFilter = { accType, accId, accName, accIcon };
+  navigate('acctxn');
+  renderAccTxn();
+}
+ 
+function renderAccTxn() {
+  const { accType, accId, accName, accIcon } = window._accTxnFilter || {};
+  if (!accId) return;
+ 
+  const txns = DB.txns;
+  let filtered = [];
+  let summaryHTML = '';
+ 
+  if (accType === 'bank') {
+    // All txns involving this bank
+    filtered = txns.filter(t =>
+      t.bank === accId ||
+      t.toBank === accId
+    ).sort((a,b)=>b.date.localeCompare(a.date));
+ 
+    const bal  = bankBalance(txns, accId);
+    const bank = DB.accounts.banks.find(b=>b.id===accId)||{};
+    const mk   = currentMonthKey();
+    const mTxns = filtered.filter(t=>monthKey(t.date)===mk);
+    const mIn  = totalIncome(mTxns.filter(t=>t.bank===accId));
+    const mOut = totalExpense(mTxns.filter(t=>t.bank===accId&&(!t.card||t.card==='none')));
+ 
+    summaryHTML = `
+      <div style="background:linear-gradient(135deg,${bank.color||'#1A7A72'},${bank.color||'#1A7A72'}bb);border-radius:var(--radius);padding:16px;margin-bottom:14px;color:white">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <div style="font-size:28px">${bank.icon||'🏦'}</div>
+          <div><div style="font-size:16px;font-weight:700">${bank.name}</div><div style="font-size:12px;opacity:.8">${bank.type||'Savings Account'}</div></div>
+        </div>
+        <div style="font-family:'DM Serif Display',serif;font-size:30px;margin-bottom:10px">${INR(bal)}</div>
+        <div style="display:flex;gap:12px">
+          <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:8px 12px;flex:1"><div style="font-size:10px;opacity:.8">This Month In</div><div style="font-size:14px;font-weight:600">+${INR0(mIn)}</div></div>
+          <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:8px 12px;flex:1"><div style="font-size:10px;opacity:.8">This Month Out</div><div style="font-size:14px;font-weight:600">-${INR0(mOut)}</div></div>
+          <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:8px 12px;flex:1"><div style="font-size:10px;opacity:.8">Opening</div><div style="font-size:14px;font-weight:600">${INR0(bank.openBal||0)}</div></div>
+        </div>
+      </div>`;
+ 
+  } else if (accType === 'card') {
+    // All txns on this CC (charges + payments)
+    filtered = txns.filter(t =>
+      t.card === accId ||
+      (t.type === 'ccPayment' && t.card === accId)
+    ).sort((a,b)=>b.date.localeCompare(a.date));
+ 
+    const bal  = ccBalance(txns, accId);
+    const util = ccUtil(txns, accId);
+    const card = DB.accounts.cards.find(c=>c.id===accId)||{};
+    const avail = Math.max(0,(card.limit||0) - bal);
+    const utilCol = util<=0.3?'#4ade80':util<=0.6?'#fbbf24':'#f87171';
+ 
+    summaryHTML = `
+      <div style="background:linear-gradient(135deg,${card.color||'#8B5E0A'},${card.color||'#8B5E0A'}99);border-radius:var(--radius);padding:16px;margin-bottom:14px;color:white">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <div style="font-size:28px">${card.icon||'💳'}</div>
+          <div><div style="font-size:16px;font-weight:700">${card.name}</div><div style="font-size:12px;opacity:.8">Credit Card</div></div>
+        </div>
+        <div style="font-size:12px;opacity:.8">Outstanding</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:30px;margin:2px 0 10px">${INR(bal)}</div>
+        <div style="height:4px;background:rgba(255,255,255,0.2);border-radius:2px;margin-bottom:8px">
+          <div style="height:100%;width:${Math.min(util*100,100)}%;background:${utilCol};border-radius:2px"></div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:8px 12px;flex:1"><div style="font-size:10px;opacity:.8">Used</div><div style="font-size:14px;font-weight:600">${(util*100).toFixed(1)}%</div></div>
+          <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:8px 12px;flex:1"><div style="font-size:10px;opacity:.8">Available</div><div style="font-size:14px;font-weight:600">${INR0(avail)}</div></div>
+          <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:8px 12px;flex:1"><div style="font-size:10px;opacity:.8">Limit</div><div style="font-size:14px;font-weight:600">${INR0(card.limit||0)}</div></div>
+        </div>
+      </div>`;
+ 
+  } else if (accType === 'loan') {
+    // All EMI payments for this loan
+    filtered = txns.filter(t =>
+      t.loanId === accId ||
+      t.catName === (DB.accounts.loans.find(l=>l.id===accId)||{}).name
+    ).sort((a,b)=>b.date.localeCompare(a.date));
+ 
+    const loan = DB.accounts.loans.find(l=>l.id===accId)||{};
+    const outstanding = loanBalance(txns, accId);
+    const repaid = (loan.openBal||0) - outstanding;
+    const repaidPct = loan.openBal>0?(repaid/loan.openBal*100):0;
+    const monthsLeft = loan.emi>0?Math.ceil(outstanding/loan.emi):0;
+ 
+    summaryHTML = `
+      <div style="background:linear-gradient(135deg,#C0392B,#8B1A1A);border-radius:var(--radius);padding:16px;margin-bottom:14px;color:white">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <div style="font-size:28px">${loan.icon||'🏦'}</div>
+          <div><div style="font-size:16px;font-weight:700">${loan.name}</div><div style="font-size:12px;opacity:.8">EMI: ${INR0(loan.emi||0)}/mo</div></div>
+        </div>
+        <div style="font-size:12px;opacity:.8">Outstanding</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:30px;margin:2px 0 10px">${outstanding<=0?'<span style="color:#4ade80">✓ Closed</span>':INR(outstanding)}</div>
+        <div style="height:4px;background:rgba(255,255,255,0.2);border-radius:2px;margin-bottom:8px">
+          <div style="height:100%;width:${Math.min(repaidPct,100)}%;background:#4ade80;border-radius:2px"></div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:8px 12px;flex:1"><div style="font-size:10px;opacity:.8">Repaid</div><div style="font-size:14px;font-weight:600">${INR0(repaid)}</div></div>
+          <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:8px 12px;flex:1"><div style="font-size:10px;opacity:.8">% Done</div><div style="font-size:14px;font-weight:600">${repaidPct.toFixed(0)}%</div></div>
+          <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:8px 12px;flex:1"><div style="font-size:10px;opacity:.8">Months Left</div><div style="font-size:14px;font-weight:600">~${monthsLeft}</div></div>
+        </div>
+      </div>`;
+ 
+  } else if (accType === 'savings') {
+    // All savings transactions matching this instrument
+    const sav = DB.accounts.savingsInstruments.find(s=>s.id===accId)||{};
+    filtered = txns.filter(t =>
+      t.type==='savings' &&
+      t.catName &&
+      t.catName.toLowerCase().includes((sav.name||'').toLowerCase().split('/')[0].trim())
+    ).sort((a,b)=>b.date.localeCompare(a.date));
+ 
+    const contrib = filtered.reduce((s,t)=>s+t.amount,0);
+    const total   = (sav.openBal||0) + contrib;
+ 
+    summaryHTML = `
+      <div style="background:linear-gradient(135deg,var(--purple),#3D2066);border-radius:var(--radius);padding:16px;margin-bottom:14px;color:white">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <div style="font-size:28px">${sav.icon||'💎'}</div>
+          <div><div style="font-size:16px;font-weight:700">${sav.name}</div><div style="font-size:12px;opacity:.8">Savings Instrument</div></div>
+        </div>
+        <div style="font-family:'DM Serif Display',serif;font-size:30px;margin:2px 0 10px">${INR(total)}</div>
+        <div style="display:flex;gap:12px">
+          <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:8px 12px;flex:1"><div style="font-size:10px;opacity:.8">Opening</div><div style="font-size:14px;font-weight:600">${INR0(sav.openBal||0)}</div></div>
+          <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:8px 12px;flex:1"><div style="font-size:10px;opacity:.8">Contributed</div><div style="font-size:14px;font-weight:600">${INR0(contrib)}</div></div>
+          <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:8px 12px;flex:1"><div style="font-size:10px;opacity:.8">Transactions</div><div style="font-size:14px;font-weight:600">${filtered.length}</div></div>
+        </div>
+      </div>`;
+  }
+ 
+  // Back button
+  summaryHTML = `<button onclick="navigate('accounts')" style="display:flex;align-items:center;gap:6px;background:none;border:none;color:var(--green);font-size:14px;font-weight:600;cursor:pointer;margin-bottom:12px;font-family:'DM Sans',sans-serif">‹ Back to Accounts</button>` + summaryHTML;
+ 
+  document.getElementById('acctxnSummary').innerHTML = summaryHTML;
+ 
+  // Transaction list
+  const el = document.getElementById('acctxnList');
+  if (!filtered.length) {
+    el.innerHTML = `<div class="empty-state"><div class="e-icon">📭</div><p>No transactions found<br>for this account</p></div>`;
+    return;
+  }
+ 
+  // Group by month
+  const grouped = {};
+  filtered.forEach(t=>{ const mk=monthKey(t.date); if(!grouped[mk])grouped[mk]=[]; grouped[mk].push(t); });
+ 
+  el.innerHTML = Object.entries(grouped).map(([mk,list])=>`
+    <div class="txn-month-header">
+      <span>${mk}</span>
+      <span style="display:flex;gap:8px">
+        <span style="color:var(--green)">+${INR0(totalIncome(list))}</span>
+        <span style="color:var(--red)">−${INR0(totalExpense(list))}</span>
+      </span>
+    </div>
+    <div class="txn-list" style="margin-bottom:12px;border-radius:0 0 var(--radius) var(--radius)">
+      ${list.map(t=>txnRowHTML(t)).join('')}
+    </div>`).join('');
+}
+ 
 function renderAccountBanks() {
   const txns = DB.txns;
   const mk = currentMonthKey();
@@ -1442,7 +1619,7 @@ function renderAccountBanks() {
     const mIn  = totalIncome(monthTxns.filter(t=>t.bank===b.id));
     const mOut = totalExpense(monthTxns.filter(t=>t.bank===b.id&&(!t.card||t.card==='none')));
     const lastTxn = [...txns].filter(t=>t.bank===b.id).sort((a,c)=>c.date.localeCompare(a.date))[0];
-    html += `<div class="account-card">
+    html += `<div class="account-card" onclick="openAccTxn('bank','${b.id}','${b.name}','${b.icon}')">
       <div class="account-header">
         <div class="account-icon" style="background:${b.color}22">${b.icon}</div>
         <div style="flex:1">
@@ -1475,7 +1652,7 @@ function renderAccountCards() {
     const util = ccUtil(txns, c.id);
     const avail = Math.max(0, c.limit - bal);
     const col   = util<=0.3?'#4ade80':util<=0.6?'#fbbf24':'#f87171';
-    html += `<div class="cc-card" style="background:linear-gradient(135deg,${c.color},${c.color}99)">
+    html += `<div class="cc-card" style="background:linear-gradient(135deg,${c.color},${c.color}99);cursor:pointer" onclick="openAccTxn('card','${c.id}','${c.name}','${c.icon}')">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
         <div class="cc-name">${c.icon} ${c.name}</div>
         <div class="action-row">
@@ -1508,7 +1685,7 @@ function renderAccountLoans() {
   loanInfos(txns).forEach(l=>{
     const pct = l.progress*100;
     const paidPct = 100-pct;
-    html += `<div class="loan-card">
+    html += `<div class="loan-card" style="cursor:pointer" onclick="openAccTxn('loan','${l.id}','${l.name}','${l.icon}')">
       <div class="loan-header">
         <div style="display:flex;align-items:center;gap:8px">
           <div style="font-size:20px">${l.icon}</div>
@@ -1557,7 +1734,7 @@ function renderAccountSavings() {
     DB.accounts.savingsInstruments.forEach(s=>{
       const contrib = txns.filter(t=>t.type==='savings' && t.catName && t.catName.toLowerCase().includes(s.name.toLowerCase().split('/')[0].trim())).reduce((sum,t)=>sum+t.amount,0);
       const total = (s.openBal||0) + contrib;
-      html += `<div class="account-card">
+      html += `<div class="account-card" onclick="openAccTxn('savings','${s.id}','${s.name}','${s.icon}')">
         <div class="account-header">
           <div class="account-icon" style="background:${s.color}22">${s.icon}</div>
           <div style="flex:1">
@@ -2463,4 +2640,6 @@ document.addEventListener('touchstart', e=>{ touchStartX=e.touches[0].clientX; }
 </script>
 </body>
 </html>
+ 
+
  
